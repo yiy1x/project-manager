@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>项目总管</title><link rel="stylesheet" href="/style.css">
+<script src="/view-state.js" defer></script><script src="/ui.js" defer></script>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">项目总管</div>
+  <p id="count-scope" class="rail-label">跟进中</p>
+  <nav id="projects" aria-label="项目筛选"></nav>
+  <div class="sidebar-bottom">
+    <p class="rail-label">检索</p>
+    <button id="claude-button">Claude Code <span>项目与聊天</span></button>
+    <button id="inventory-button">已关联聊天</button>
+  </div>
+</aside>
+<main>
+  <header><div><h1 id="page-title">我的任务</h1><p id="activity-sync" class="subtle" role="status">正在读取本机状态…</p></div><button id="refresh">刷新</button></header>
+  <div class="toolbar">
+    <div class="tabs" id="queues"><button data-queue="跟进中" class="selected">跟进中</button><button data-queue="已完成">已完成</button><button data-queue="暂不跟进">暂不跟进</button></div>
+    <label class="search-label"><span class="sr-only">搜索任务和聊天</span><input id="search" type="search" placeholder="搜索任务" maxlength="300"></label>
+  </div>
+  <section id="workspace"><div id="task-list" aria-label="任务队列"></div><article id="detail" aria-label="任务详情"></article></section>
+  <section id="claude-catalog" hidden><div id="claude-live" class="live-strip" role="status"></div><p id="claude-summary" class="subtle" role="status"></p><div id="claude-results"></div></section>
+  <section id="inventory" hidden><p id="coverage" class="subtle"></p><div class="table-wrap"><table><thead><tr><th>聊天</th><th>来源</th><th>状态</th><th>最近记录</th></tr></thead><tbody id="inventory-rows"></tbody></table></div></section>
+  <footer><p id="sync"></p><details><summary>数据与状态说明</summary><button id="auto-review-toggle">自动分析：关</button><p id="scope"></p><p>跟进中的聊天整轮结束后，后台回读新对话并更新进度和阶段时间线。分析位置单独显示；失败会重试，也可暂停自动分析。总管自身和暂不跟进的任务不自动分析。</p><p>Codex与Claude共用猫老大增量订阅，按会话ID关联；未连接时退回本机记录并明确标注。模型请求结束不等于工具执行结束或任务结项。</p><p>Claude历史只在打开、搜索或手动刷新时读取，不再每5秒扫描。本机轮次记录超过2分钟无更新会待确认；没有请求不代表聊天空闲。</p><p>只读检索不自动加入任务，不执行历史指令。灰绿色主题用于降低纯白刺激感，并非医疗护眼功能。</p></details></footer>
+  <div id="notice" role="status" hidden></div>
+</main>
+</body>
+</html>
