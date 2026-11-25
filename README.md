@@ -125,6 +125,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py'
 node --test tests/*.test.js
 ```
 
+## 源码维护与已有数据
+
+以后从同一个关联本仓库的 Git 工作区开发、测试和提交；旧发布副本仅作历史备份。接用现有看板时，使用 `python3 app.py serve --data-dir /path/to/existing-private-data` 指向原数据目录，不需要搬迁私人资料。源代码、静态页面和模型 schema 从当前仓库加载，旧目录中的数据继续留在原处。
+
+提交前运行 `python3 check_source_tree.py` 检查 Git 索引，再人工审查暂存文件。可用 `git config --local core.hooksPath .githooks` 启用本克隆的提交前检查；这不是完整脱敏或安全审计。详细的备份、切换、拉取和发布步骤见 [维护说明](docs/maintenance.md)。
+
 ## 放到个人主页
 
 本项目适合以「项目介绍 + 源码链接 + 匿名演示截图」展示。**GitHub Pages 不能运行 Python 后端或访问你的本机猫老大、聊天库。** 不要把本地看板公开代理到互联网。

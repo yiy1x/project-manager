@@ -1,5 +1,14 @@
-/data/
-/demo-data/
+data/
+demo-data/
+.local-*/
+backups/
+auth.json
+credentials.json
+*.jsonl
+*.pem
+*.key
+*.p12
+*.pfx
 **/review-runs/
 __pycache__/
 *.py[cod]

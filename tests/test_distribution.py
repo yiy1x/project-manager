@@ -15,6 +15,31 @@ from timeline import KINDS, for_task, short_points
 
 
 class DistributionTests(unittest.TestCase):
+    def test_existing_private_data_can_be_reused_without_copying_or_rewriting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "existing-private-data"
+            root.mkdir()
+            files = {"analysis.json": {"tasks": []}, "tracking.json": {"mode": "allowlist", "source_ids": []}, "timeline.json": {"events": []}, "analysis_settings.json": {"enabled": False}}
+            for name, payload in files.items():
+                (root / name).write_text(json.dumps(payload))
+            before = {name: ((root / name).read_bytes(), (root / name).stat().st_ino) for name in files}
+            with patch.multiple(app, ROOT=root, DATABASE=root / "总管.sqlite3", DEMO=False, LAST_SCAN=0.0):
+                app.initialize()
+                with app.database() as connection:
+                    connection.execute("INSERT INTO tasks VALUES ('synthetic-task','暂不跟进')")
+                    connection.execute("INSERT INTO notes(task_id,text,created_at) VALUES ('synthetic-task','synthetic reminder','2026-01-01')")
+                inode = app.DATABASE.stat().st_ino
+                app.initialize()
+                with app.database() as connection:
+                    self.assertEqual(connection.execute("SELECT queue FROM tasks WHERE id='synthetic-task'").fetchone()[0], "暂不跟进")
+                    self.assertEqual(connection.execute("SELECT text FROM notes").fetchone()[0], "synthetic reminder")
+                self.assertEqual(app.DATABASE.stat().st_ino, inode)
+                self.assertEqual(before, {name: ((root / name).read_bytes(), (root / name).stat().st_ino) for name in files})
+                app.refresh(True)
+                snapshot = app.state()
+                self.assertEqual(snapshot["tasks"], [])
+                self.assertFalse(snapshot["auto_review"]["enabled"])
+
     def test_empty_install_is_private_and_preserves_existing_data(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

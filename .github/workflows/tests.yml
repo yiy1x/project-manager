@@ -25,3 +25,4 @@ jobs:
           node-version: '22'
       - run: python -m unittest discover -s tests -p 'test_*.py'
       - run: node --test tests/*.test.js
+      - run: python check_source_tree.py
