@@ -20,6 +20,7 @@ let mutating = false;
 let requestVersion = 0;
 let readController = null;
 let noticeTimer = null;
+let restoredTask = null;
 const drafts = new Map();
 const timelineDrafts = new Map();
 const timelineFilters = new Map();
@@ -32,6 +33,19 @@ const element = (tag, text, className) => {
   return node;
 };
 const dateText = value => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "未知";
+const navigationKey = () => JSON.stringify([project, queue, selected, inventoryVisible, catalogVisible, byId("search").value]);
+function revealRestoredTask() {
+  if (!restoredTask) return;
+  const task = data.tasks.find(task => task.id === restoredTask.id);
+  if (restoredTask.navigation !== navigationKey() || !task) { restoredTask = null; return; }
+  if (task.queue !== "跟进中") return;
+  queue = "跟进中";
+  if (project !== "全部项目") project = task.project;
+  selected = task.id;
+  inventoryVisible = catalogVisible = false;
+  if (!ManagerView.selectTasks([task], { search: byId("search").value }).length) taskSearch = byId("search").value = "";
+  restoredTask = null;
+}
 function notify(message) {
   window.clearTimeout(noticeTimer);
   byId("notice").textContent = message;
@@ -50,6 +64,7 @@ async function load() {
     if (!response.ok) throw new Error(result.error);
     if (version !== requestVersion) return false;
     data = result;
+    revealRestoredTask();
     render();
     return true;
   } catch (error) {
@@ -72,6 +87,7 @@ async function mutate(path, payload) {
   render();
   let saved = false;
   let rejected = false;
+  const startedNavigation = navigationKey();
   try {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Manager-Token": data.token }, body: JSON.stringify(payload) });
     const result = await response.json();
@@ -81,6 +97,7 @@ async function mutate(path, payload) {
       throw new Error(result.error);
     }
     saved = true;
+    if (path === "/api/queue" && payload.queue === "跟进中" && startedNavigation === navigationKey()) restoredTask = { id: payload.task_id, navigation: startedNavigation };
     if (path === "/api/notes" && drafts.get(payload.task_id)?.trim() === payload.text) drafts.delete(payload.task_id);
     if (path === "/api/timeline" && timelineDrafts.get(payload.task_id)?.id === payload.id) timelineDrafts.delete(payload.task_id);
     const refreshed = await load();
@@ -105,7 +122,7 @@ function render() {
   byId("queues").hidden = inventoryVisible || catalogVisible;
   if (!data) return;
   const search = (catalogVisible ? taskSearch : byId("search").value).trim().toLowerCase();
-  const view = ManagerView.deriveView(data.tasks, { project, queue, search });
+  const view = ManagerView.deriveView(data.tasks, { project, queue, search }, ManagerView.liveStatuses(activity, activityFailed));
   project = view.selectedProject;
   const following = data.tasks.filter(task => task.queue === "跟进中").length;
   const lastSuccess = data.auto_review?.last_success_at;
@@ -113,6 +130,7 @@ function render() {
   byId("sync").title = `人工基线 ${data.analysis_date}；最近后台检测 ${dateText(data.auto_review?.checked_at)}。各任务已读位置独立记录，最近一次成功不代表全部同步。`;
   byId("scope").textContent = data.scope + (data.errors.length ? " 读取异常：" + data.errors.join("；") : "");
   byId("count-scope").textContent = `${queue}${search.trim() ? " · 搜索结果" : ""}`;
+  byId("count-scope").title = "进行中优先，其余按最近结束时间倒序；缺少结束时间时按最近记录。排序不改变跟进状态。";
   byId("refresh").disabled = mutating;
   byId("auto-review-toggle").textContent = data.auto_review?.enabled ? "自动分析：开" : "自动分析：关";
   byId("auto-review-toggle").disabled = mutating || Boolean(data.demo);
@@ -124,6 +142,7 @@ function render() {
   byId("projects").replaceChildren();
   for (const name of view.projects) {
     const button = element("button", name, project === name && !inventoryVisible && !catalogVisible ? "selected" : "");
+    button.dataset.orderKey = name;
     button.append(element("small", String(view.projectCounts[name])));
     button.onclick = () => { project = name; if (catalogVisible) { catalogSearch = byId("search").value; byId("search").value = taskSearch; } catalogVisible = false; inventoryVisible = false; render(); };
     byId("projects").append(button);
@@ -132,8 +151,9 @@ function render() {
   if (inventoryVisible) {
     byId("coverage").textContent = `${data.entries.length} 条已关联记录，不含 Claude Code 检索结果。`;
     byId("inventory-rows").replaceChildren();
-    for (const entry of data.entries.filter(entry => JSON.stringify(entry).toLowerCase().includes(search)).sort((left, right) => (right.updated || "").localeCompare(left.updated || ""))) {
+    for (const entry of ManagerView.sortSources(data.entries.filter(entry => JSON.stringify(entry).toLowerCase().includes(search)), ManagerView.liveStatuses(activity, activityFailed))) {
       const row = element("tr");
+      row.dataset.orderKey = entry.id;
       const title = element("td", entry.title);
       title.append(element("small", entry.id));
       if (entry.category === "聊天") {
@@ -159,6 +179,7 @@ function render() {
   if (!tasks.some(task => task.id === selected)) selected = tasks[0]?.id;
   for (const task of tasks) {
     const button = element("button", undefined, "task" + (task.id === selected ? " selected" : ""));
+    button.dataset.orderKey = task.id;
     const meta = element("div", undefined, "task-meta");
     meta.append(element("span", task.priority, "priority " + task.priority), activityBadge(task.source_ids));
     button.append(meta, element("h3", task.name), element("p", task.stage));
@@ -485,6 +506,36 @@ function activityBadge(identities) {
   badge.dataset.sources = JSON.stringify(identities);
   return badge;
 }
+function reorderChildren(container, keys) {
+  const ranked = new Map(Array.from(container.children).filter(node => node.dataset.orderKey != null).map(node => [node.dataset.orderKey, node]));
+  const ordered = keys.map(key => ranked.get(key)).filter(Boolean);
+  const active = document.activeElement;
+  const restoreFocus = active && Array.from(container.querySelectorAll("*")).includes(active);
+  let position = 0;
+  for (const node of ordered) {
+    while (container.children[position] && container.children[position].dataset.orderKey == null) position++;
+    if (container.children[position] !== node) container.insertBefore(node, container.children[position] || null);
+    position++;
+  }
+  if (restoreFocus && document.activeElement !== active) active.focus({ preventScroll: true });
+}
+function refreshOrder(statuses) {
+  if (data) {
+    const search = (catalogVisible ? taskSearch : byId("search").value).trim().toLowerCase();
+    const view = ManagerView.deriveView(data.tasks, { project, queue, search }, statuses);
+    reorderChildren(byId("projects"), view.projects);
+    reorderChildren(byId("task-list"), view.visibleTasks.map(task => task.id));
+    reorderChildren(byId("inventory-rows"), ManagerView.sortSources(data.entries, statuses).map(entry => entry.id));
+  }
+  if (catalog) {
+    const ordered = ManagerView.sortCatalog(catalog.projects, statuses);
+    reorderChildren(byId("claude-results"), ordered.map(project => project.id || project.path || project.name));
+    for (const section of byId("claude-results").children) {
+      const group = ordered.find(project => (project.id || project.path || project.name) === section.dataset.orderKey);
+      if (group) reorderChildren(section, group.sessions.map(session => session.id));
+    }
+  }
+}
 function renderActivity() {
   const age = activity ? Date.now() - Date.parse(activity.checked_at) : Infinity;
   const recent = age >= -5000 && age < 25000;
@@ -505,8 +556,10 @@ function renderActivity() {
     }
     live.append(element("p", "状态跟随猫老大；历史内容按需检索。没有模型请求，也可能正在执行工具或等待输入。", "subtle"));
   }
+  const statuses = ManagerView.liveStatuses(activity, activityFailed);
+  refreshOrder(statuses);
   for (const badge of document.querySelectorAll(".activity")) {
-    const states = JSON.parse(badge.dataset.sources).map(identity => activity?.statuses[identity]).filter(Boolean);
+    const states = JSON.parse(badge.dataset.sources).map(identity => statuses[identity]).filter(Boolean);
     const order = ["running", "error", "paused", "unknown", "idle"];
     states.sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind));
     const status = states[0];
@@ -582,11 +635,13 @@ function renderCatalog() {
   const expanded = new Set(Array.from(byId("claude-results").querySelectorAll("details[open]")).map(node => node.dataset.key));
   byId("claude-results").replaceChildren();
   updateCatalogSummary();
-  for (const project of catalog.projects) {
+  for (const project of ManagerView.sortCatalog(catalog.projects, ManagerView.liveStatuses(activity, activityFailed))) {
     const section = element("section", undefined, "catalog-project");
+    section.dataset.orderKey = project.id || project.path || project.name;
     section.append(element("h2", `${project.name} (${project.sessions.length}/${project.session_count})`), element("p", project.path || "项目目录未记录", "catalog-path"));
     for (const session of project.sessions) {
       const row = element("article", undefined, "session");
+      row.dataset.orderKey = session.id;
       const heading = element("div", undefined, "session-heading");
       const updated = element("span", dateText(session.updated), "tag");
       updated.title = session.time_basis || "最近记录";

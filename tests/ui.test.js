@@ -25,6 +25,11 @@ class Element {
   set textContent(text) { this.text = String(text); this.children = []; }
   get textContent() { return (this.text || "") + this.children.map(child => child.textContent).join(""); }
   append(...children) { this.children.push(...children); }
+  insertBefore(child, reference) {
+    this.children = this.children.filter(node => node !== child);
+    const index = reference ? this.children.indexOf(reference) : this.children.length;
+    this.children.splice(index, 0, child);
+  }
   replaceChildren(...children) { this.text = ""; this.children = children; }
   setAttribute(name, value) { this[name] = value; }
   querySelectorAll(selector) {
@@ -107,6 +112,120 @@ async function ready() {
 function liveResult(extra = {}) {
   return { checked_at: new Date().toISOString(), statuses: {}, errors: [], gateway: { connected: true }, live_requests: [], ...extra };
 }
+
+test("恢复跟进从已完成或暂停切回目标任务，计数筛选与草稿保持一致", async () => {
+  for (const previousQueue of ["已完成", "暂不跟进"]) {
+    const page = harness();
+    page.requests[0].respond(snapshot(previousQueue));
+    await settle();
+    page.queueButton(previousQueue).onclick();
+    page.node("projects").children.find(button => button.textContent.startsWith("桌面体验")).onclick();
+    const input = page.node("detail").querySelector("textarea");
+    input.value = "恢复时保留草稿";
+    input.oninput();
+    const restoring = page.node("detail").querySelectorAll("button").find(button => button.textContent === "恢复跟进").onclick();
+    page.requests[1].respond({ ok: true });
+    await settle();
+    page.requests[2].respond(snapshot());
+    await restoring;
+    await settle();
+    assert.equal(page.queueButton("跟进中").className, "selected");
+    assert.equal(page.queueButton("跟进中").textContent, "跟进中 1");
+    assert.equal(page.sidebarCount("桌面体验"), 1);
+    assert.equal(page.node("detail").querySelector("h2").textContent, "pet");
+    assert.match(page.node("detail").textContent, /当前队列：跟进中/);
+    assert.equal(page.node("detail").querySelector("textarea").value, "恢复时保留草稿");
+    page.node("projects").children[0].onclick();
+    assert.equal(page.queueButton("跟进中").textContent, "跟进中 3");
+    assert.equal(page.queueButton(previousQueue).textContent, previousQueue + " 0");
+  }
+});
+
+test("恢复成功但刷新失败时不抢切，后续核实成功才定位且不重复提交", async () => {
+  const page = harness();
+  page.requests[0].respond(snapshot("暂不跟进"));
+  await settle();
+  page.queueButton("暂不跟进").onclick();
+  page.node("search").value = "暂不跟进";
+  page.node("search").oninput();
+  const saving = page.context.mutate("/api/queue", { task_id: "pet", queue: "跟进中" });
+  page.requests[1].respond({ ok: true });
+  await settle();
+  page.requests[2].reject(new Error("refresh offline"));
+  await saving;
+  assert.equal(page.queueButton("暂不跟进").className, "selected");
+  assert.match(page.node("notice").textContent, /已保存，但界面刷新失败/);
+  const loading = page.context.load();
+  page.requests[3].respond(snapshot());
+  await loading;
+  assert.equal(page.node("search").value, "");
+  assert.match(page.node("detail").textContent, /当前队列：跟进中/);
+  assert.equal(page.requests.filter(request => request.options.method === "POST").length, 1);
+});
+
+test("恢复跟进被拒绝时保留旧界面，等待期间用户切换不被强行拉回", async () => {
+  const page = harness();
+  page.requests[0].respond(snapshot("已完成"));
+  await settle();
+  page.queueButton("已完成").onclick();
+  const denied = page.context.mutate("/api/queue", { task_id: "pet", queue: "跟进中" });
+  page.requests[1].respond({ error: "failed" }, 400);
+  await denied;
+  assert.match(page.node("detail").textContent, /当前队列：已完成/);
+  const restoring = page.context.mutate("/api/queue", { task_id: "pet", queue: "跟进中" });
+  page.queueButton("暂不跟进").onclick();
+  page.requests[2].respond({ ok: true });
+  await settle();
+  page.requests[3].respond(snapshot());
+  await restoring;
+  assert.equal(page.queueButton("暂不跟进").className, "selected");
+});
+
+test("状态驱动侧栏与任务重排，但不抢选中详情、提醒焦点或展开状态", async () => {
+  const page = await ready();
+  vm.runInContext('data.tasks.forEach(task => { task.source_ids = [task.id]; task.sources = [{id:task.id,updated:"2026-01-01T00:00:00Z"}]; }); render();', page.context);
+  const input = page.node("detail").querySelector("textarea");
+  input.value = "正在输入";
+  input.oninput();
+  input.focus();
+  input.setSelectionRange(1, 2);
+  const detail = page.node("detail").querySelector("details");
+  detail.open = true;
+  const originalTasks = [...page.node("task-list").children];
+  page.streams[0].emit(liveResult({ statuses: { pet: { kind: "running", started_at: new Date().toISOString(), label: "进行中" } } }));
+  assert.equal(page.node("task-list").children[0], originalTasks[1]);
+  assert.equal(page.node("projects").children[1].dataset.orderKey, "桌面体验");
+  assert.equal(page.node("detail").querySelector("h2").textContent, "http400");
+  assert.equal(page.node("detail").querySelector("textarea"), input);
+  assert.equal(page.context.document.activeElement, input);
+  assert.equal(detail.open, true);
+  assert.equal(input.value, "正在输入");
+  page.streams[0].onerror();
+  assert.equal(page.node("task-list").children[0], originalTasks[0]);
+  assert.equal(page.node("detail").querySelector("textarea"), input);
+});
+
+test("关联聊天与Claude分组按同一优先规则更新，不重新检索或重建展开项", async () => {
+  const page = await ready();
+  vm.runInContext('data.entries = [{id:"a",title:"A",updated:"2026-01-01T00:00:00Z"},{id:"b",title:"B",updated:"2026-01-02T00:00:00Z"}];', page.context);
+  page.node("inventory-button").onclick();
+  assert.equal(page.node("inventory-rows").children[0].dataset.orderKey, "b");
+  page.streams[0].emit(liveResult({ statuses: { a: { kind: "running" } } }));
+  assert.equal(page.node("inventory-rows").children[0].dataset.orderKey, "a");
+  page.node("claude-button").onclick();
+  const group = catalogResult().projects[0];
+  page.requests[1].respond({ ...catalogResult(), projects: [{ ...group, id: "recent", sessions: [{ ...group.sessions[0], id: "b", updated: "2026-01-02T00:00:00Z" }] }, { ...group, id: "older", sessions: [{ ...group.sessions[0], id: "a", updated: "2026-01-01T00:00:00Z" }] }] });
+  await settle();
+  const expanded = page.node("claude-results").querySelector("details");
+  expanded.open = true;
+  page.node("search").value = "keep";
+  page.streams[0].emit(liveResult({ statuses: { b: { kind: "running" } } }));
+  assert.equal(page.node("claude-results").children[0].dataset.orderKey, "recent");
+  assert.ok(page.node("claude-results").querySelectorAll("details").includes(expanded));
+  assert.equal(expanded.open, true);
+  assert.equal(page.node("search").value, "keep");
+  assert.equal(page.requests.length, 2);
+});
 
 test("自动分析显示已读位置，失败可重试，版本事件触发刷新", async () => {
   const page = await ready();

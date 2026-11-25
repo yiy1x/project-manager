@@ -22,6 +22,7 @@
     <div class="tabs" id="queues"><button data-queue="跟进中" class="selected">跟进中</button><button data-queue="已完成">已完成</button><button data-queue="暂不跟进">暂不跟进</button></div>
     <label class="search-label"><span class="sr-only">搜索任务和聊天</span><input id="search" type="search" placeholder="搜索任务" maxlength="300"></label>
   </div>
+  <p class="subtle">进行中优先 · 最近结束在前<span title="未知结束时间的聊天按最近记录排序；请求结束不代表任务结项。"> · 无结束时间按最近记录</span></p>
   <section id="workspace"><div id="task-list" aria-label="任务队列"></div><article id="detail" aria-label="任务详情"></article></section>
   <section id="claude-catalog" hidden><div id="claude-live" class="live-strip" role="status"></div><p id="claude-summary" class="subtle" role="status"></p><div id="claude-results"></div></section>
   <section id="inventory" hidden><p id="coverage" class="subtle"></p><div class="table-wrap"><table><thead><tr><th>聊天</th><th>来源</th><th>状态</th><th>最近记录</th></tr></thead><tbody id="inventory-rows"></tbody></table></div></section>

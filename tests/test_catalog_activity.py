@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from activity import read_activity, status_record
+from activity import event_time, read_activity, status_record
 from catalog import CACHE, search_projects
 
 
@@ -127,6 +127,31 @@ class ActivityTests(unittest.TestCase):
             result = read_activity({"codex:tracked"}, directory)
             self.assertEqual(result["statuses"], {})
             self.assertEqual(len(result["errors"]), 1)
+
+    def test_event_times_accept_seconds_milliseconds_iso_and_reject_invalid_future(self):
+        instant = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(event_time(instant), event_time(instant * 1000))
+        self.assertEqual(event_time(instant), event_time("2026-01-01T00:00:00Z"))
+        for value in (None, "invalid", 0, float("nan"), datetime.now().timestamp() + 60):
+            self.assertIsNone(event_time(value))
+
+    def test_completion_time_is_not_replaced_with_gateway_heartbeat_or_http_finish(self):
+        clock = datetime.now().timestamp()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / ".codex").mkdir()
+            with sqlite3.connect(home / ".codex/state_5.sqlite") as connection:
+                connection.execute("CREATE TABLE threads (id TEXT, updated_at INTEGER, rollout_path TEXT)")
+                connection.execute("INSERT INTO threads VALUES ('tracked',?,NULL)", (clock - 20,))
+            with sqlite3.connect(home / ".codex/thread_history_1.sqlite") as connection:
+                connection.execute("CREATE TABLE thread_turns (thread_id TEXT, status TEXT, started_at INTEGER, completed_at INTEGER, rollout_ordinal INTEGER)")
+                connection.execute("INSERT INTO thread_turns VALUES ('tracked','completed',?,?,1)", (clock - 100, clock - 30))
+            gateway = {"connected": True, "observed_at": datetime.now(timezone.utc).isoformat(), "checked_at": datetime.now(timezone.utc).isoformat(), "routes": [{"agent": "codex", "source_id": "codex:tracked", "done": True, "time": datetime.fromtimestamp(clock - 10, timezone.utc).isoformat(), "kind": "idle", "label": "请求已结束"}]}
+            result = read_activity({"codex:tracked"}, home, gateway)
+            status = result["statuses"]["codex:tracked"]
+            self.assertEqual(status["raw"], "gateway")
+            self.assertEqual(status["completed_at"], event_time(clock - 30))
+            self.assertNotEqual(status["completed_at"], gateway["observed_at"])
 
 
 if __name__ == "__main__":

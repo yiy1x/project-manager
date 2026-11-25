@@ -31,6 +31,13 @@ def status_record(raw, updated, basis, clock=None):
     return {"kind": kind, "label": label, "updated_at": updated, "basis": basis, "raw": raw}
 
 
+def event_time(value):
+    instant = timestamp(value)
+    if not 0 < instant <= datetime.now(TIMEZONE).timestamp() + 5:
+        return None
+    return datetime.fromtimestamp(instant, TIMEZONE).isoformat()
+
+
 def read_activity(source_ids, home=None, gateway_snapshot=None):
     home = source_home(home)
     statuses = {}
@@ -55,7 +62,10 @@ def read_activity(source_ids, home=None, gateway_snapshot=None):
                     basis = "当前聊天记录读取失败，不能沿用旧轮次状态。"
                     errors.append("Codex 当前状态读取失败：" + safe_text(error))
                 updated = datetime.fromtimestamp(row[0], TIMEZONE).isoformat() if row else None
-                statuses["codex:" + identity] = status_record(turn["status"] if turn else None, updated, basis)
+                status = status_record(turn["status"] if turn else None, updated, basis)
+                status["started_at"] = event_time(turn["started_at"]) if turn else None
+                status["completed_at"] = event_time(turn["completed_at"]) if turn and turn["status"] in ("completed", "failed", "interrupted") else None
+                statuses["codex:" + identity] = status
         except (OSError, sqlite3.Error, ValueError) as error:
             errors.append("Codex 状态读取失败：" + safe_text(error))
         finally:
@@ -69,7 +79,10 @@ def read_activity(source_ids, home=None, gateway_snapshot=None):
             if not isinstance(record, dict) or not isinstance(record.get("sessionId"), str):
                 continue
             updated = datetime.fromtimestamp(timestamp(record.get("updatedAt")), TIMEZONE).isoformat()
-            statuses["claude:" + record["sessionId"]] = status_record(record.get("status"), updated, "Claude Code 本机会话状态记录；不保证进程仍存活。无状态记录的会话显示未知，不以文件存在或HTTP成功推断运行。")
+            status = status_record(record.get("status"), updated, "Claude Code 本机会话状态记录；不保证进程仍存活。无状态记录的会话显示未知，不以文件存在或HTTP成功推断运行。")
+            status["started_at"] = event_time(record.get("startedAt"))
+            status["completed_at"] = event_time(record.get("completedAt")) if record.get("status") in ("completed", "failed", "interrupted") else None
+            statuses["claude:" + record["sessionId"]] = status
         except (OSError, ValueError, OverflowError) as error:
             errors.append("Claude 状态读取失败：" + safe_text(error))
     gateway = read_gateway() if gateway_snapshot is None else gateway_snapshot
@@ -90,5 +103,7 @@ def read_activity(source_ids, home=None, gateway_snapshot=None):
             "kind": latest["kind"], "label": latest["label"], "updated_at": gateway["observed_at"],
             "basis": "猫老大实时路由快照；按agent和session精确关联。请求结束不等于工具执行结束或任务结项。",
             "raw": "gateway", "active_requests": len(active),
+            "started_at": event_time(latest["time"]) if active else (previous or {}).get("started_at"),
+            "completed_at": (previous or {}).get("completed_at"),
         }
     return {"checked_at": now(), "statuses": statuses, "errors": errors, "gateway": {key: gateway[key] for key in ("connected", "observed_at", "checked_at", "error") if key in gateway}, "live_requests": [route for route in routes if route["agent"] == "claude" and not route["done"]]}
